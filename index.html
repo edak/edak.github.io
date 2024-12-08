@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sonesse2 Provisioning</title>
+</head>
+<body>
+  <h1>Sonesse2 Device Provisioning</h1>
+  <!-- Input for PIN entry -->
+  <input id="pin" type="number" value="248705" placeholder="Enter 6-digit PIN (e.g., 123456)">
+  <!-- Connect button -->
+  <button id="connect">Connect</button>
+  <div id="status"></div>
+
+  <!-- Controls for device actions (hidden initially) -->
+  <div id="controls" style="display: none;">
+    <button id="moveUpLarge">Move Up Large</button>
+    <button id="moveUpSmall">Move Up Small</button>
+    <button id="reverse">Reverse Direction</button>
+    <button id="setUpperLimit">Set Upper Limit</button><br>
+    <button id="moveDownLarge" disabled>Move Down Large</button>
+    <button id="moveDownSmall" disabled>Move Down Small</button>
+    <button id="setLowerLimit" disabled>Set Lower Limit</button><br>
+    <button id="open" disabled>Open</button>
+    <button id="close" disabled>Close</button><br>  
+    <button id="leaveNetwork" disabled>Leave Network</button>
+  </div>
+
+  <script>
+    // Global variables for device and server connection
+    let device, server;
+
+    // Bluetooth characteristic UUIDs for Sonesse2 provisioning
+    const endpoints = {
+      service: '00000000-cad9-46c6-a2ea-2ca16d57b4a5',
+      serviceb: '00010000-cad9-46c6-a2ea-2ca16d57b4a5',
+      servicec: '00020000-cad9-46c6-a2ea-2ca16d57b4a5',
+      authenticate: '0000000b-cad9-46c6-a2ea-2ca16d57b4a5',
+      identify: '00000001-cad9-46c6-a2ea-2ca16d57b4a5',
+      gotoPosition: '00000005-cad9-46c6-a2ea-2ca16d57b4a5',
+      configureRange: '0001000b-cad9-46c6-a2ea-2ca16d57b4a5',
+      setDirection: '00010005-cad9-46c6-a2ea-2ca16d57b4a5',
+      moveUp: '00010009-cad9-46c6-a2ea-2ca16d57b4a5',
+      setUpperLimit: '00010007-cad9-46c6-a2ea-2ca16d57b4a5',
+      setLowerLimit: '00010007-cad9-46c6-a2ea-2ca16d57b4a5',
+      moveDown: '00010008-cad9-46c6-a2ea-2ca16d57b4a5',
+      leaveNetwork: '00020001-cad9-46c6-a2ea-2ca16d57b4a5',
+    };
+
+    /**
+     * Get a characteristic from any available service.
+     * This method iterates over all services to find the desired characteristic.
+     * @param {string} characteristicUuid - The UUID of the characteristic to find.
+     * @returns {Promise<BluetoothRemoteGATTCharacteristic>} - The found characteristic.
+     */
+    const getCharacteristicFromAnyService = async (characteristicUuid) => {
+      const services = await server.getPrimaryServices();
+      for (const service of services) {
+        try {
+          const characteristic = await service.getCharacteristic(characteristicUuid);
+          console.log(`Found characteristic ${characteristicUuid} in service ${service.uuid}`);
+          return characteristic;
+        } catch (err) {
+          console.warn(`Characteristic ${characteristicUuid} not found in service ${service.uuid}`);
+        }
+      }
+      throw new Error(`Characteristic ${characteristicUuid} not found in any service`);
+    };
+
+    // Event listener for the "Connect" button
+    document.getElementById('connect').addEventListener('click', async () => {
+      const pin = parseInt(document.getElementById('pin').value, 10);
+      if (isNaN(pin) || pin < 0 || pin > 999999) {
+        alert('Please enter a valid 6-digit PIN.');
+        return;
+      }
+
+      try {
+        // Request connection to the Sonesse2 device
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'Sonesse2' }],
+          optionalServices: [endpoints.service, endpoints.serviceb, endpoints.servicec],
+        });
+        server = await device.gatt.connect();
+
+        // Authenticate using the provided PIN
+        const authenticateCharacteristic = await getCharacteristicFromAnyService(endpoints.authenticate);
+        const pinBuffer = new Uint8Array([
+          pin & 0xff,
+          (pin >> 8) & 0xff,
+          (pin >> 16) & 0xff,
+        ]);
+        await authenticateCharacteristic.writeValue(pinBuffer);
+
+        // Send identify command and confirm movement
+        const identifyCharacteristic = await getCharacteristicFromAnyService(endpoints.identify);
+        await identifyCharacteristic.writeValue(Uint8Array.of(0x01));
+        if (!confirm('Did the blind move? If yes, click OK. Otherwise, click Cancel.')) {
+          return;
+        }
+
+        // Configure range and default direction
+        const configureRangeCharacteristic = await getCharacteristicFromAnyService(endpoints.configureRange);
+        await configureRangeCharacteristic.writeValueWithoutResponse(new Uint8Array([0, 0]));
+
+        const setDirectionCharacteristic = await getCharacteristicFromAnyService(endpoints.setDirection);
+        await setDirectionCharacteristic.writeValueWithResponse(new Uint8Array([0x01]));
+
+        // Update status and show controls
+        document.getElementById('status').innerText = 'Connected!';
+        document.getElementById('controls').style.display = 'block';
+      } catch (error) {
+        console.error('Connection failed:', error);
+        alert('Failed to connect or provision the device. See console for details.');
+      }
+    });
+
+    /**
+     * Add event listeners for control buttons.
+     * Each button is linked to a corresponding Bluetooth operation.
+     */
+    document.getElementById('moveUpLarge').addEventListener('click', async () => {
+      const moveUpCharacteristic = await getCharacteristicFromAnyService(endpoints.moveUp);
+      await moveUpCharacteristic.writeValueWithResponse(new Uint8Array([0xaf, 0x01]));
+      document.getElementById('status').innerText = 'Moved up!';
+    });
+
+    document.getElementById('moveUpSmall').addEventListener('click', async () => {
+      const moveUpCharacteristic = await getCharacteristicFromAnyService(endpoints.moveUp);
+      await moveUpCharacteristic.writeValueWithResponse(new Uint8Array([0xaf, 0x00]));
+      document.getElementById('status').innerText = 'Moved up!';
+    });
+
+    document.getElementById('moveDownLarge').addEventListener('click', async () => {
+      const moveDownCharacteristic = await getCharacteristicFromAnyService(endpoints.moveDown);
+      await moveDownCharacteristic.writeValueWithResponse(new Uint8Array([0xaf, 0x01]));
+      document.getElementById('status').innerText = 'Moved down!';
+    });
+
+    document.getElementById('moveDownSmall').addEventListener('click', async () => {
+      const moveDownCharacteristic = await getCharacteristicFromAnyService(endpoints.moveDown);
+      await moveDownCharacteristic.writeValueWithResponse(new Uint8Array([0xaf, 0x00]));
+      document.getElementById('status').innerText = 'Moved down!';
+    });
+
+    document.getElementById('setUpperLimit').addEventListener('click', async () => {
+      const setUpperLimitCharacteristic = await getCharacteristicFromAnyService(endpoints.setUpperLimit);
+      await setUpperLimitCharacteristic.writeValueWithResponse(new Uint8Array([0x00]));
+      document.getElementById('moveDownLarge').disabled = false;
+      document.getElementById('moveDownSmall').disabled = false;
+      document.getElementById('setLowerLimit').disabled = false;
+      document.getElementById('status').innerText = 'Upper Limit Set!';
+    });
+
+    document.getElementById('setLowerLimit').addEventListener('click', async () => {
+      const setLowerLimitCharacteristic = await getCharacteristicFromAnyService(endpoints.setLowerLimit);
+      await setLowerLimitCharacteristic.writeValueWithResponse(new Uint8Array([0x01]));
+      document.getElementById('leaveNetwork').disabled = false;
+      document.getElementById('open').disabled = false;
+      document.getElementById('close').disabled = false;
+      document.getElementById('status').innerText = 'Lower Limit Set!';
+    });
+
+    document.getElementById('open').addEventListener('click', async () => {
+      const openCharacteristic = await getCharacteristicFromAnyService(endpoints.gotoPosition);
+      await openCharacteristic.writeValueWithResponse(new Uint8Array([0x00, 0x00]));
+    });
+
+    document.getElementById('close').addEventListener('click', async () => {
+      const closeCharacteristic = await getCharacteristicFromAnyService(endpoints.gotoPosition);
+      await closeCharacteristic.writeValueWithResponse(new Uint8Array([0xff, 0x7f]));
+    });
+
+    document.getElementById('reverse').addEventListener('click', async () => {
+      const setDirectionCharacteristic = await getCharacteristicFromAnyService(endpoints.setDirection);
+      const prevValue = await setDirectionCharacteristic.readValue();
+      const newValue = (prevValue.getUint8(0) + 1) % 2;
+      await setDirectionCharacteristic.writeValueWithResponse(new Uint8Array([newValue]));
+    });
+
+    document.getElementById('leaveNetwork').addEventListener('click', async () => {
+      const leaveNetworkCharacteristic = await getCharacteristicFromAnyService(endpoints.leaveNetwork);
+      await leaveNetworkCharacteristic.writeValueWithResponse(new Uint8Array([0x01]));
+      alert('Device removed from the network.');
+      document.getElementById('status').innerText = 'Left Zigbee Network!';
+    });
+  </script>
+</body>
+</html>
